@@ -1,0 +1,14 @@
+# 환경변수 파일
+.env
+
+# Python 관련
+__pychche__/
+export_requirements.py
+
+# 가상환경
+venv*/
+mychatbotvenv/
+
+# 기타
+.DS_Store.env
+.mychatbotvenv/
