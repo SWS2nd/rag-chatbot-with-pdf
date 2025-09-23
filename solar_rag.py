@@ -12,7 +12,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ChatMessage
 
 from langsmith import Client
 
@@ -82,32 +82,55 @@ def display_pdf(file):
 def get_redis_message_history(session_id: str):
     return RedisChatMessageHistory(session_id=session_id, url=REDIS_URL)
 
+# 🔹 추가: 전역 세션 ID 처리
+if "session_id" not in st.session_state:
+    st.session_state["session_id"] = "example1234"  # 기본값
+session_id = st.session_state["session_id"]
+
+# 🔹 추가: Redis 메시지 객체 전역 생성
+redis_history = get_redis_message_history(session_id)
+
+# 🔹 추가: file_cache 전역 초기화
+if "file_cache" not in st.session_state:
+    st.session_state["file_cache"] = {}
+
 # 사이드바 구성 - 세션 ID 입력(🔹 추가), PDF 업로드
 with st.sidebar:
-    session_id = st.text_input("Session ID를 입력하세요", value="example1234")
+    # 🔹 수정
+    session_id_input = st.text_input("Session ID를 입력하세요", value=session_id)
+    # 🔹 추가: 사용자가 입력한 session id가 기본 session id 값과 다를 경우
+    # 입력한 session id로 세션 상태 변경 후 해당 세션으로 redis 메시지 객체 갱신
+    if session_id_input != session_id:
+        st.session_state["session_id"] = session_id_input
+        session_id = session_id_input
+        # 🔹 수정: Redis 메시지 객체 갱신
+        # redis_history를 세션 state에 저장시켜 사이드바 로컬을 벗어나도 보여지도록 수정
+        st.session_state["redis_history"] = get_redis_message_history(session_id)
+    
+    # 대화 기록 초기화 버튼
     clear_space = st.button("대화 기록 초기화")
     if clear_space:
         st.session_state["messages"] = []
         st.rerun()
-        
+    
+    # 파일 업로드 처리
     st.header(f"Add your documents!")
     uploaded_file = st.file_uploader("Choose your `.pdf` file", type="pdf")
-    # 파일 업로드 처리
     if uploaded_file:
         print(uploaded_file)
+        file_key = f"{session_id}-{uploaded_file.name}"
+        st.write("Indexing your document...")
         try:
-            file_key = f"{session_id}-{uploaded_file.name}"
-            st.write("Indexing your document...")
-            
-            # 임시 디렉토리 생성 및 파일 저장
-            with tempfile.TemporaryDirectory() as temp_dir:
-                file_path = os.path.join(temp_dir, uploaded_file.name)
-                print("file path:", file_path)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getvalue())
-                
-                # PDF 로더 생성 및 문서 분할
-                if file_key not in st.session_state.get('file_cache', {}):
+            # 🔹 수정: 중복 방지 조건 적용, file_cache에 없으면 처리
+            if file_key not in st.session_state["file_cache"]:
+                # 임시 디렉토리 생성 및 파일 저장
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    file_path = os.path.join(temp_dir, uploaded_file.name)
+                    print("file path:", file_path)
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getvalue())
+                    
+                    # PDF 로더 생성 및 문서 분할                
                     if os.path.exists(temp_dir):
                         print("temp_dir:", temp_dir)
                         loader = PyPDFLoader(file_path)
@@ -175,9 +198,15 @@ with st.sidebar:
                     question_answer_chain = create_stuff_documents_chain(chat, qa_prompt)
                     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
                     
-                    # 🔹 추가: Redis에 업로드한 PDF 파일명만 저장
-                    redis_history = get_redis_message_history(session_id)
+                    # 🔹 추가: Redis에 업로드한 PDF 파일명 저장
                     redis_history.add_user_message(f"업로드 파일: {uploaded_file.name}")
+                    
+                    # 🔹 추가: session_state에 저장
+                    st.session_state["uploaded_file"] = uploaded_file
+                    st.session_state["rag_chain"] = rag_chain
+                    st.session_state["redis_history"] = get_redis_message_history(session_id)
+                    # 🔹 추가: file_cache 업데이트 (중복 방지용)
+                    st.session_state["file_cache"][file_key] = True
                     
                     # PDF 파일 디스플레이
                     st.success("Ready to Chat!")
@@ -191,7 +220,7 @@ with st.sidebar:
                 st.stop()
 
 # 🔹 추가 및 수정: 페이지 표시 및 타이틀 입력
-st.set_page_config(page_title="Upload Text PDF And Chat",page_icon="🧑‍🚀")
+st.set_page_config(page_title="Upload Text PDF And Chat",page_icon="🗪")
 st.title("🧑‍🚀 Askument")
 
 # 🔘 채팅 초기화 버튼 추가
@@ -222,42 +251,67 @@ MAX_MESSAGES_BEFORE_DELETION = 12
 
 # 유저 입력 처리
 if prompt := st.chat_input("질문하세요!"):
-    if len(st.session_state.messages) >= MAX_MESSAGES_BEFORE_DELETION:
-        # 이 부분에서 세션의 Max크기(지금은 12개)를 넘어가면 2개를 지우는 이유는 입력, 출력 2개이기 때문에 2개를 지우는 것! 기억!
-        del st.session_state.messages[0]
-        del st.session_state.messages[0]
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    # 🔹 추가: PDF 업로드가 안 된 상태라면 안내 메시지
+    if "uploaded_file" not in st.session_state:
+        st.toast("먼저 PDF 파일을 업로드해야 질문할 수 있습니다.")
+    else:
+        # 🔹 추가
+        redis_history = st.session_state["redis_history"]
+        rag_chain = st.session_state["rag_chain"]
+        
+        # 세션 메시지 길이 제한
+        if len(st.session_state.messages) >= MAX_MESSAGES_BEFORE_DELETION:
+            # 이 부분에서 세션의 Max크기(지금은 12개)를 넘어가면 2개를 지우는 이유는 입력, 출력 2개이기 때문에 2개를 지우는 것! 기억!
+            del st.session_state.messages[0]
+            del st.session_state.messages[0]
+            
+        #  🔹 주석 추가: 유저 메시지 세션 저장 및 UI 표시
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # 🔹 추가: Redis에 유저 질문 저장
+        redis_history.add_user_message(prompt)
 
-    # AI 응답처리
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty() # 여기를 빈칸으로 만들었다가
-        full_response = ""
-        
-        # 🔹 추가: StreamHandler 객체 생성
-        handler = StreamHandler(message_placeholder)
-        # 🔹 추가: "callbacks": [handler] 부분 추가하여 StreamHandler를 이용하여 실시간 토큰 스트리밍
-        result = rag_chain.invoke({"input": prompt, "chat_history": st.session_state.messages, "callbacks": [handler]})
-        
-        # 검색된 context 확인 (추가)
-        # 참고한 자료, 문맥 표시
-        with st.expander("참고한 부분"):
-            st.write(result.get("context", "검색된 문서 없음"))
-        
-        # 🔹 주석 처리 부분:
-        # StreamHandler 객체 사용하지 않을 시 실시간 토큰 스트리밍 구현을 위함
-        # 한 단어씩 message_placeholder에 표시됨
-        # StreamHandler를 사용하면 실시간 토큰 스트리밍이 가능하므로
-        # 굳이 해당 부분을 남길 필요 없음.
-        #for chunk in result["answer"].split(" "):
-            # print("모델의 출력값", result["answer"])
-            # print(chunk)
-        #    full_response += chunk + " "
-        #    time.sleep(0.2)
-            # 이 부분에서 message_placeholder를 채우는 부분
-        #    message_placeholder.markdown(full_response+ "▌")
-        #message_placeholder.markdown(full_response)
-                
-        st.session_state.messages.append(
-            {"role": "assistant","content": full_response})
+        # AI 응답처리
+        with st.chat_message("assistant"):
+            # message_placeholder = st.empty() # 여기를 빈칸으로 만들었다가
+            full_response = ""
+            
+            # 🔹 수정 
+            result = rag_chain.invoke({
+                "input": prompt, 
+                "chat_history": st.session_state.messages, 
+            })
+                    
+            # 🔹 주석 처리 부분:
+            # StreamHandler 객체 사용하지 않을 시 실시간 토큰 스트리밍 구현을 위함
+            # 한 단어씩 message_placeholder에 표시됨
+            #for chunk in result["answer"].split(" "):
+                # print("모델의 출력값", result["answer"])
+                # print(chunk)
+            #    full_response += chunk + " "
+            #    time.sleep(0.2)
+                # 이 부분에서 message_placeholder를 채우는 부분
+            #    message_placeholder.markdown(full_response+ "▌")
+            #message_placeholder.markdown(full_response)
+            
+            # 🔹 추가: AI 답변 추출
+            full_response = result.get("answer", "답변을 생성하지 못했습니다.")
+            # 🔹 추가: Streamlit UI에 표시
+            st.chat_message("assistant").write(full_response)
+            
+            # 🔹 아래와 연관된 부분 utils.py 파일의 코드 수정
+            # 🔹 주석 추가: AI 메시지 세션 저장
+            # from langchain_core.messages import ChatMessage 클래스를 사용하여
+            # message를 객체로 활용하지 않았다. 딕셔너리로 사용!
+            # 따라서, utis_rag.py 파일의 message 출력 코드를 그에 맞게 수정해줘야 함!
+            st.session_state.messages.append(
+                {"role": "assistant","content": full_response})
+            # 🔹 추가: Redis에 AI 답변 저장
+            redis_history.add_ai_message(full_response)
+            
+            # 검색된 context 확인 (추가)
+            # 참고한 자료, 문맥 표시
+            with st.expander("참고한 부분"):
+                st.write(result.get("context", "검색된 문서 없음"))
