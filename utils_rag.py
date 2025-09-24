@@ -45,12 +45,17 @@ def init_conversation() -> None:
 
 def print_conversation() -> None:
     """이전 대화를 표시해주는 함수"""
-
+    # 🔹 수정: 이전 답변의 context도 포함하도록(남아있도록) 수정
     # 만약 messages 에 기록중인 대화가 있다면 출력해주는 코드
     # 🔹 수정: messages가 딕셔너리이므로 그에 맞게 수정
     if "messages" in st.session_state and len(st.session_state["messages"]) > 0:
         for message in st.session_state["messages"]:
-            if message["role"] == "user":
-                st.chat_message("user").write(message["content"])
-            else:
-                st.chat_message("assistant").write(message["content"])
+            role = message["role"]
+            content = message["content"]
+            context = message.get("context")  # context 읽기
+            with st.chat_message(role):
+                st.markdown(content)
+                # context가 있으면 expander로 표시
+                if context:
+                    with st.expander("참고한 부분"):
+                        st.write(context)
