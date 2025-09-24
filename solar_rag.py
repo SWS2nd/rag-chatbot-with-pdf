@@ -47,6 +47,12 @@ print("UPSTAGE_API_KEY:", os.getenv("UPSTAGE_API_KEY"))
 print("LANGCHAIN_API_KEY:", os.getenv("LANGCHAIN_API_KEY"))
 print("VECTORSTORE:", VECTORSTORE)
 
+try:
+    import redis
+    print("Redis package is installed!")
+except ImportError:
+    print("Redis package is NOT installed!")
+
 # ----------------------------
 # LangSmith 인증 테스트
 # ----------------------------
