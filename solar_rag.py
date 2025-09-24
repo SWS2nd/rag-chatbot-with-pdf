@@ -3,6 +3,7 @@ import os, getpass, base64, uuid, tempfile
 from typing import Dict, List, Any, Optional
 import hashlib # 새 pdf 파일 판단 시 사용
 import streamlit as st
+import redis
 
 from langchain_upstage import ChatUpstage, UpstageEmbeddings 
 from langchain_chroma import Chroma # 로컬 테스트용 크로마 벡터스토어
@@ -46,12 +47,6 @@ VECTORSTORE = os.getenv("VECTORSTORE")
 print("UPSTAGE_API_KEY:", os.getenv("UPSTAGE_API_KEY"))
 print("LANGCHAIN_API_KEY:", os.getenv("LANGCHAIN_API_KEY"))
 print("VECTORSTORE:", VECTORSTORE)
-
-try:
-    import redis
-    print("Redis package is installed!")
-except ImportError:
-    print("Redis package is NOT installed!")
 
 # ----------------------------
 # LangSmith 인증 테스트
