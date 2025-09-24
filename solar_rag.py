@@ -3,7 +3,6 @@ import os, getpass, base64, uuid, tempfile
 from typing import Dict, List, Any, Optional
 import hashlib # 새 pdf 파일 판단 시 사용
 import streamlit as st
-import redis
 
 from langchain_upstage import ChatUpstage, UpstageEmbeddings 
 from langchain_chroma import Chroma # 로컬 테스트용 크로마 벡터스토어
@@ -255,27 +254,29 @@ with st.sidebar:
                         st.info("Using Redis (배포 모드)")
                         # 💥 Redis index 이름: 세션ID + 파일 해시로 고정 (uuid 제거 -> 동일한 pdf면 그대로 사용하도록 함)
                         idx_name = f"pdf_index_{session_id}_{file_hash}"
+                        # 이전 인덱스 이름 가져오기
+                        prev_idx = st.session_state.get("last_index_name")
                         
                         # 💥 이전 Redis index 삭제: 세션 변경이나 PDF 변경 시 누적 방지
-                        prev_idx = st.session_state.get("last_index_name")
                         if prev_idx and prev_idx != idx_name:
                             try:
+                                # LangChain 제공 메서드
                                 Redis.delete_index(prev_idx) # 💥 기존 index 삭제
-                                print(f"Deleted previous Redis index: {prev_idx}")
+                                print(f"[INFO] Deleted previous Redis index: {prev_idx}")
                             except Exception as e:
-                                print("이전 Redis 인덱스 삭제 실패:", e)
+                                print("[WARN] 이전 Redis 인덱스 삭제 실패:", e)
                         
                         print("Redis index name:", idx_name)
-                        # 레디스 벡터 스토어 생성                        
+                        # 💥 session_state에 현재 index_name 저장(다음번 교체 시 대비)
+                        st.session_state["last_index_name"] = idx_name
+                        
+                        # 레디스 벡터 스토어 생성        
                         vectorstore = Redis.from_documents(
                             pages,
                             UpstageEmbeddings(model="solar-embedding-1-large"),
                             redis_url=REDIS_URL,
                             index_name=idx_name
                         )
-                        
-                        # 💥 session_state에 새 index_name 저장
-                        st.session_state["last_index_name"] = idx_name
                         
                         # 💥 Redis 메시지 히스토리 초기화 (PDF 교체 시 이전 대화 제거)
                         if "redis_history" not in st.session_state:
